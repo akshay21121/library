@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Environment files
+.env
+.env.local
+
+# Database local storage
+data/*.sqlite
+data/*.sqlite.tmp
+
+# Uploads directory contents (preserve folder structure)
+uploads/*
+!uploads/.gitkeep
+
+# Build artifacts
+dist/
+
+# OS and logs
+.DS_Store
+Thumbs.db
+*.log
+npm-debug.log*
