@@ -55,4 +55,13 @@ router.get('/logs', async (req, res, next) => {
   }
 });
 
+router.get('/smtp-status', async (req, res, next) => {
+  try {
+    const status = await whatsappService.verifySmtp();
+    res.json(status);
+  } catch (err) {
+    next(err);
+  }
+});
+
 module.exports = router;

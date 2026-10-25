@@ -1,6 +1,7 @@
 const { v4: uuidv4 } = require('uuid');
 const config = require('../config');
 const db = require('../db/database');
+const emailService = require('./emailService');
 
 /**
  * Get WhatsApp notification templates for library tenant
@@ -106,10 +107,10 @@ async function dispatchWhatsAppMessage(phoneNumber, messageContent) {
 }
 
 /**
- * Send Manual Reminders to selected student IDs
+ * Send Manual Reminders to selected student IDs via WhatsApp or Gmail SMTP Email
  */
 async function sendManualReminders(tenantId, payload, currentUserId) {
-  const { studentIds = [], customMessage = '', templateKey = 'fee_reminder_upcoming' } = payload;
+  const { studentIds = [], customMessage = '', templateKey = 'fee_reminder_upcoming', channel = 'email' } = payload;
 
   if (!Array.isArray(studentIds) || studentIds.length === 0) {
     const error = new Error('Please select at least one student recipient.');
@@ -117,7 +118,7 @@ async function sendManualReminders(tenantId, payload, currentUserId) {
     throw error;
   }
 
-  const tenant = db.queryOne('SELECT name, phone, currency FROM tenants WHERE id = ?', [tenantId]);
+  const tenant = db.queryOne('SELECT name, phone, address, currency FROM tenants WHERE id = ?', [tenantId]);
   const template = db.queryOne(
     'SELECT * FROM whatsapp_templates WHERE template_key = ? AND tenant_id = ?',
     [templateKey, tenantId]
@@ -128,7 +129,7 @@ async function sendManualReminders(tenantId, payload, currentUserId) {
 
   for (const sId of studentIds) {
     const student = db.queryOne('SELECT * FROM students WHERE id = ? AND tenant_id = ?', [sId, tenantId]);
-    if (!student || !student.phone) continue;
+    if (!student) continue;
 
     // Get latest unpaid or overdue invoice
     const invoice = db.queryOne(
@@ -140,16 +141,17 @@ async function sendManualReminders(tenantId, payload, currentUserId) {
 
     if (!invoice) continue;
 
-    // Idempotency key: prevents duplicate reminder for same student + invoice on same day
-    const idempotencyKey = `manual_${tenantId}_${sId}_${invoice.id}_${today}`;
+    // Idempotency key: prevents duplicate reminder for same student + invoice + channel on same day
+    const idempotencyKey = `manual_${channel}_${tenantId}_${sId}_${invoice.id}_${today}`;
     const existingLog = db.queryOne('SELECT id, status FROM whatsapp_logs WHERE idempotency_key = ?', [idempotencyKey]);
 
     if (existingLog) {
       results.push({
         studentId: sId,
         studentName: student.name,
+        channel,
         status: 'skipped_duplicate',
-        reason: 'Reminder already sent today.',
+        reason: `${channel.toUpperCase()} reminder already sent today.`,
       });
       continue;
     }
@@ -168,7 +170,28 @@ async function sendManualReminders(tenantId, payload, currentUserId) {
       ? interpolateTemplate(template.body_text, variables)
       : `Dear ${student.name}, reminder: your fee of ${tenant.currency} ${invoice.balance_amount} is due on ${invoice.due_date}.`;
 
-    const dispatchResult = await dispatchWhatsAppMessage(student.phone, finalMessage);
+    let dispatchResult;
+    let recipientIdentifier = student.phone;
+    let messageType = 'manual_fee_reminder';
+
+    if (channel === 'email') {
+      messageType = 'manual_email_reminder';
+      recipientIdentifier = student.email || `${student.phone}@noemail`;
+
+      dispatchResult = await emailService.sendFeeReminderEmail({
+        to: student.email,
+        studentName: student.name,
+        libraryName: tenant.name,
+        amount: invoice.balance_amount,
+        currency: tenant.currency || 'INR',
+        dueDate: invoice.due_date,
+        phone: tenant.phone,
+        address: tenant.address,
+        customNotes: customMessage.trim(),
+      });
+    } else {
+      dispatchResult = await dispatchWhatsAppMessage(student.phone, finalMessage);
+    }
 
     const logId = uuidv4();
     const now = new Date().toISOString();
@@ -178,17 +201,18 @@ async function sendManualReminders(tenantId, payload, currentUserId) {
         id, tenant_id, student_id, invoice_id, phone_number, message_type,
         message_content, status, provider_message_id, failure_reason,
         idempotency_key, sent_at, created_at
-      ) VALUES (?, ?, ?, ?, ?, 'manual_fee_reminder', ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         logId,
         tenantId,
         student.id,
         invoice.id,
-        student.phone,
-        finalMessage,
+        recipientIdentifier,
+        messageType,
+        channel === 'email' ? `Email to ${student.email}: Due ₹${invoice.balance_amount}` : finalMessage,
         dispatchResult.status,
-        dispatchResult.providerMessageId,
-        dispatchResult.failureReason,
+        dispatchResult.providerMessageId || dispatchResult.messageId || null,
+        dispatchResult.failureReason || null,
         idempotencyKey,
         now,
         now,
@@ -198,17 +222,18 @@ async function sendManualReminders(tenantId, payload, currentUserId) {
     results.push({
       studentId: student.id,
       studentName: student.name,
-      phone: student.phone,
+      channel,
+      recipient: recipientIdentifier,
       status: dispatchResult.status,
-      providerMessageId: dispatchResult.providerMessageId,
+      providerMessageId: dispatchResult.providerMessageId || dispatchResult.messageId || null,
     });
   }
 
   // Audit log
   db.run(
     `INSERT INTO audit_logs (id, tenant_id, user_id, role, action, entity_type, details, ip_address, created_at)
-     VALUES (?, ?, ?, 'library_owner', 'WHATSAPP_MANUAL_REMINDERS_SENT', 'whatsapp', ?, '127.0.0.1', ?)`,
-    [uuidv4(), tenantId, currentUserId, JSON.stringify({ recipientCount: results.length }), new Date().toISOString()]
+     VALUES (?, ?, ?, 'library_owner', 'FEE_REMINDERS_SENT', 'notifications', ?, '127.0.0.1', ?)`,
+    [uuidv4(), tenantId, currentUserId, JSON.stringify({ channel, recipientCount: results.length }), new Date().toISOString()]
   );
 
   return { success: true, processed: results };
@@ -284,8 +309,8 @@ async function processAutomaticReminders(tenantId) {
         inv.student_phone,
         message,
         dispatchResult.status,
-        dispatchResult.providerMessageId,
-        dispatchResult.failureReason,
+        dispatchResult.providerMessageId || null,
+        dispatchResult.failureReason || null,
         idempotencyKey,
         now,
         now,
@@ -346,4 +371,6 @@ module.exports = {
   sendManualReminders,
   processAutomaticReminders,
   getNotificationLogs,
+  verifySmtp: emailService.verifySmtp,
 };
+

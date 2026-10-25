@@ -13,5 +13,15 @@ module.exports = {
     phoneId: process.env.WHATSAPP_PHONE_ID || '',
     wabaId: process.env.WHATSAPP_WABA_ID || '',
     sandboxMode: !process.env.WHATSAPP_TOKEN,
+  },
+  smtp: {
+    host: process.env.SMTP_HOST || 'smtp.gmail.com',
+    port: parseInt(process.env.SMTP_PORT || '587', 10),
+    secure: process.env.SMTP_SECURE === 'true',
+    user: process.env.SMTP_USER || '',
+    pass: process.env.SMTP_PASS || '',
+    from: process.env.SMTP_FROM || '',
+    isConfigured: Boolean(process.env.SMTP_USER && process.env.SMTP_PASS),
   }
 };
+

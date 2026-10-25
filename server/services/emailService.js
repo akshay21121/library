@@ -1,0 +1,179 @@
+const nodemailer = require('nodemailer');
+const config = require('../config');
+
+let transporter = null;
+
+function getTransporter() {
+  if (!config.smtp.user || !config.smtp.pass) {
+    return null;
+  }
+
+  if (!transporter) {
+    transporter = nodemailer.createTransporter({
+      host: config.smtp.host,
+      port: config.smtp.port,
+      secure: config.smtp.secure, // true for 465, false for 587
+      auth: {
+        user: config.smtp.user,
+        pass: config.smtp.pass,
+      },
+    });
+  }
+  return transporter;
+}
+
+/**
+ * Verify Gmail SMTP connection
+ */
+async function verifySmtp() {
+  const mailer = getTransporter();
+  if (!mailer) {
+    return {
+      connected: false,
+      message: 'Gmail SMTP credentials (SMTP_USER & SMTP_PASS) not configured in .env',
+    };
+  }
+
+  try {
+    await mailer.verify();
+    return { connected: true, message: 'Gmail SMTP connection successful!' };
+  } catch (err) {
+    return { connected: false, message: `SMTP verification failed: ${err.message}` };
+  }
+}
+
+/**
+ * Send Fee Reminder HTML Email to a Student
+ */
+async function sendFeeReminderEmail(options) {
+  const {
+    to,
+    studentName,
+    libraryName,
+    amount,
+    currency = 'INR',
+    dueDate,
+    phone = '',
+    address = '',
+    customNotes = '',
+  } = options;
+
+  if (!to) {
+    return { status: 'failed', failureReason: 'Student email is missing.' };
+  }
+
+  const subject = `Fee Reminder: Your Membership Fee for ${libraryName} is Due`;
+
+  const htmlContent = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background: #f8fafc; margin: 0; padding: 24px; color: #0f172a; }
+        .container { max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+        .header { background: #4f46e5; color: #ffffff; padding: 28px 24px; text-align: center; }
+        .header h1 { margin: 0; font-size: 20px; font-weight: 700; }
+        .body { padding: 28px 24px; }
+        .greeting { font-size: 16px; font-weight: 600; margin-bottom: 12px; }
+        .card-due { background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 18px; margin: 20px 0; text-align: center; }
+        .due-label { font-size: 13px; color: #991b1b; text-transform: uppercase; font-weight: 600; }
+        .due-amount { font-size: 32px; font-weight: 800; color: #dc2626; margin: 6px 0; }
+        .due-date { font-size: 13px; color: #7f1d1d; }
+        .info-table { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 13.5px; }
+        .info-table td { padding: 8px 0; border-bottom: 1px solid #f1f5f9; }
+        .info-table td.label { color: #64748b; width: 40%; }
+        .info-table td.value { font-weight: 600; color: #0f172a; }
+        .footer { background: #f8fafc; padding: 20px 24px; text-align: center; font-size: 12px; color: #64748b; border-top: 1px solid #e2e8f0; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <h1>${libraryName}</h1>
+        </div>
+        <div class="body">
+          <div class="greeting">Dear ${studentName},</div>
+          <p style="font-size: 14px; line-height: 1.6; color: #334155;">
+            This is a friendly reminder regarding your upcoming study library membership renewal fee. Please settle your fee to keep your dedicated seat and shift reserved without interruption.
+          </p>
+
+          <div class="card-due">
+            <div class="due-label">Outstanding Balance Due</div>
+            <div class="due-amount">${currency} ${amount}</div>
+            <div class="due-date">Due on or before: <strong>${dueDate}</strong></div>
+          </div>
+
+          <table class="info-table">
+            <tr>
+              <td class="label">Library</td>
+              <td class="value">${libraryName}</td>
+            </tr>
+            <tr>
+              <td class="label">Contact Phone</td>
+              <td class="value">${phone || 'Contact Reception'}</td>
+            </tr>
+            <tr>
+              <td class="label">Premises Address</td>
+              <td class="value">${address || 'Main Campus'}</td>
+            </tr>
+          </table>
+
+          ${customNotes ? `<p style="background: #f1f5f9; padding: 12px; border-radius: 6px; font-size: 13px; color: #475569;">${customNotes}</p>` : ''}
+
+          <p style="font-size: 13.5px; color: #334155; margin-top: 24px;">
+            You can pay via UPI, cash, or card at the library reception desk to collect your official stamped receipt.
+          </p>
+
+          <p style="font-size: 13.5px; color: #334155;">
+            Best wishes for your preparation and studies,<br>
+            <strong>${libraryName} Administration</strong>
+          </p>
+        </div>
+        <div class="footer">
+          This is an automated administrative notification sent by ${libraryName}.
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  const mailer = getTransporter();
+
+  if (mailer) {
+    try {
+      const fromAddress = config.smtp.from || `"${libraryName}" <${config.smtp.user}>`;
+      const info = await mailer.sendMail({
+        from: fromAddress,
+        to,
+        subject,
+        html: htmlContent,
+      });
+
+      return {
+        status: 'delivered',
+        messageId: info.messageId,
+        provider: 'gmail_smtp',
+      };
+    } catch (err) {
+      console.error('Gmail SMTP send error:', err);
+      return {
+        status: 'failed',
+        failureReason: err.message,
+      };
+    }
+  }
+
+  // Transparent simulation / sandbox mode if credentials not configured yet
+  return {
+    status: 'sent',
+    messageId: `sim_email_${Date.now()}`,
+    provider: 'sandbox_simulation',
+    note: 'Gmail SMTP credentials not set in .env. Dispatched in simulated mode.',
+  };
+}
+
+module.exports = {
+  verifySmtp,
+  sendFeeReminderEmail,
+};

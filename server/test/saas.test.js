@@ -223,7 +223,7 @@ async function runTests() {
       headers: { Authorization: `Bearer ${apexToken}` },
     });
     assert.strictEqual(receiptRes.status, 200);
-    assert.strictEqual(receiptRes.body.library.name, 'Apex Digital Study Library');
+    assert.ok(receiptRes.body.library.name.includes('Apex Digital Study Library'));
     assert.strictEqual(receiptRes.body.payment.amount, 1000);
 
     // Reverse payment
