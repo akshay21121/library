@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS tenants (
   reminder_days_before INTEGER DEFAULT 3,
   reminder_time TEXT DEFAULT '10:00',
   plan_id TEXT,
+  library_code TEXT UNIQUE,
   status TEXT DEFAULT 'active',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -41,12 +42,16 @@ CREATE TABLE IF NOT EXISTS tenants (
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
+  account_id TEXT UNIQUE,
   role TEXT NOT NULL, -- 'supreme_admin', 'library_owner'
   name TEXT NOT NULL,
   email TEXT UNIQUE NOT NULL,
   password_hash TEXT NOT NULL,
   phone TEXT,
   status TEXT DEFAULT 'active',
+  is_activated INTEGER DEFAULT 1,
+  activation_token_hash TEXT,
+  activation_token_expires_at TEXT,
   last_login_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL

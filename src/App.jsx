@@ -22,11 +22,21 @@ import AuditLogsPage from './pages/superadmin/AuditLogsPage';
 // Modals
 import ReceiptModal from './components/fees/ReceiptModal';
 
+import ActivateAccount from './pages/ActivateAccount';
+
 export default function App() {
   const { user, token, loading, viewTenant, openTenantReadOnly, exitTenantReadOnly } = useAuth();
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [globalReceiptId, setGlobalReceiptId] = useState(null);
+
+  const isActivationRoute =
+    window.location.pathname === '/activate-account' ||
+    window.location.search.includes('token=');
+
+  if (isActivationRoute) {
+    return <ActivateAccount />;
+  }
 
   if (loading) {
     return (

@@ -25,4 +25,24 @@ router.get('/me', authenticate, async (req, res, next) => {
   }
 });
 
+router.get('/validate-activation-token', async (req, res, next) => {
+  try {
+    const { token } = req.query;
+    const result = await authService.validateActivationToken(token);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/activate-account', async (req, res, next) => {
+  try {
+    const { token, password } = req.body;
+    const result = await authService.activateAccount(token, password);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
 module.exports = router;

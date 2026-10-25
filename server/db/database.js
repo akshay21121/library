@@ -48,8 +48,24 @@ async function initDb() {
   if (fs.existsSync(schemaPath)) {
     const schemaSql = fs.readFileSync(schemaPath, 'utf8');
     dbInstance.run(schemaSql);
-    saveToDisk();
   }
+
+  // Auto-run non-destructive column migrations for existing databases
+  const migrations = [
+    "ALTER TABLE tenants ADD COLUMN library_code TEXT;",
+    "ALTER TABLE users ADD COLUMN account_id TEXT;",
+    "ALTER TABLE users ADD COLUMN is_activated INTEGER DEFAULT 1;",
+    "ALTER TABLE users ADD COLUMN activation_token_hash TEXT;",
+    "ALTER TABLE users ADD COLUMN activation_token_expires_at TEXT;"
+  ];
+  for (const sql of migrations) {
+    try {
+      dbInstance.run(sql);
+    } catch (e) {
+      // Column already exists, safe to ignore
+    }
+  }
+  saveToDisk();
 
   return dbInstance;
 }

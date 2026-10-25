@@ -300,7 +300,156 @@ async function runTests() {
     assert.strictEqual(zenithSettings.name, 'Zenith Scholar Hub');
     assert.strictEqual(zenithSettings.opening_time, '07:00');
 
-    console.log('\n ALL 10 CRITICAL BACKEND TESTS PASSED SUCCESSFULLY! \n');
+    // 11. Test Add Library with Automatic Owner Creation, Email Delivery, Activation Token, and Login Guard
+    console.log('Test 11: Add Library, Owner Creation, Activation Token & Login Guards...');
+
+    // A. Create new library as Supreme Admin
+    const plans = db.query('SELECT * FROM saas_plans');
+    assert.ok(plans.length > 0, 'SaaS plans must exist');
+
+    const newOwnerEmail = `arvind.rao.${Date.now()}@nalandalib.com`;
+    const createLibRes = await request('POST', '/api/superadmin/libraries', {
+      headers: { Authorization: `Bearer ${adminToken}` },
+      body: {
+        name: 'Nalanda Modern Study Hub',
+        ownerName: 'Prof. Arvind Rao',
+        ownerEmail: newOwnerEmail,
+        ownerPhone: '+919123456789',
+        address: '108 University Road',
+        city: 'Varanasi',
+        state: 'Uttar Pradesh',
+        postalCode: '221005',
+        planId: plans[0].id,
+        status: 'active',
+      },
+    });
+
+    assert.strictEqual(createLibRes.status, 201, 'Add Library must return 201 Created');
+    assert.ok(createLibRes.body.library.libraryCode.startsWith('LIB-'), 'Must generate unique Library ID');
+    assert.ok(createLibRes.body.owner.accountId.startsWith('OWN-'), 'Must generate unique Owner Account ID');
+    assert.strictEqual(createLibRes.body.owner.email, newOwnerEmail.toLowerCase());
+
+    // Verify email delivery reporting: if SMTP is unconfigured, sent must be false and not claim success
+    assert.strictEqual(createLibRes.body.emailDelivery.sent, false, 'Must report email delivery failed when SMTP is unconfigured');
+    assert.ok(createLibRes.body.emailDelivery.activationLink, 'Must provide activation link');
+
+    const nalandaTenantId = createLibRes.body.library.id;
+    const initialActivationLink = createLibRes.body.emailDelivery.activationLink;
+    const rawToken1 = new URL(initialActivationLink).searchParams.get('token');
+    assert.ok(rawToken1, 'Activation link must contain token');
+
+    // B. Test Duplicate Email Prevention
+    const dupEmailRes = await request('POST', '/api/superadmin/libraries', {
+      headers: { Authorization: `Bearer ${adminToken}` },
+      body: {
+        name: 'Duplicate Library',
+        ownerName: 'Copycat',
+        ownerEmail: newOwnerEmail,
+        ownerPhone: '+919999999999',
+        planId: plans[0].id,
+        status: 'active',
+      },
+    });
+    assert.strictEqual(dupEmailRes.status, 409, 'Duplicate owner email must return 409 Conflict');
+
+    // C. Test Pre-Activation Login Rejection
+    const preActivationLogin = await request('POST', '/api/auth/login', {
+      body: {
+        email: newOwnerEmail,
+        password: 'RandomPassword123',
+      },
+    });
+    assert.strictEqual(preActivationLogin.status, 403, 'Pre-activation login must be rejected with 403');
+    assert.ok((preActivationLogin.body.message || preActivationLogin.body.error).includes('Account not yet activated'));
+
+    // D. Test Resend Activation Email
+    const resendRes = await request('POST', `/api/superadmin/libraries/${nalandaTenantId}/resend-activation`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    assert.strictEqual(resendRes.status, 200, 'Resend activation must return 200');
+    assert.ok(resendRes.body.emailDelivery.activationLink, 'Must return refreshed activation link');
+
+    const refreshedLink = resendRes.body.emailDelivery.activationLink;
+    const refreshedToken = new URL(refreshedLink).searchParams.get('token');
+    assert.ok(refreshedToken, 'Refreshed link must contain new token');
+
+    // E. Test Token Validation Endpoint
+    const validateRes = await request('GET', `/api/auth/validate-activation-token?token=${refreshedToken}`);
+    assert.strictEqual(validateRes.status, 200, 'Token validation must return 200');
+    assert.strictEqual(validateRes.body.valid, true);
+    assert.strictEqual(validateRes.body.email, newOwnerEmail.toLowerCase());
+    assert.strictEqual(validateRes.body.libraryName, 'Nalanda Modern Study Hub');
+
+    // F. Test Account Password Creation & Activation
+    const activateRes = await request('POST', '/api/auth/activate-account', {
+      body: {
+        token: refreshedToken,
+        password: 'NalandaOwner@2026',
+      },
+    });
+    assert.strictEqual(activateRes.status, 200, 'Account activation must return 200');
+    assert.strictEqual(activateRes.body.success, true);
+
+    // G. Test Single-Use Token Invalidation
+    const reuseTokenRes = await request('POST', '/api/auth/activate-account', {
+      body: {
+        token: refreshedToken,
+        password: 'AnotherPassword@2026',
+      },
+    });
+    assert.strictEqual(reuseTokenRes.status, 400, 'Token reuse must be rejected with 400');
+
+    // H. Test Post-Activation Login
+    const postActivationLogin = await request('POST', '/api/auth/login', {
+      body: {
+        email: newOwnerEmail,
+        password: 'NalandaOwner@2026',
+      },
+    });
+    assert.strictEqual(postActivationLogin.status, 200, 'Post-activation login must succeed');
+    assert.strictEqual(postActivationLogin.body.user.role, 'library_owner');
+    assert.strictEqual(postActivationLogin.body.user.tenantId, nalandaTenantId);
+
+    const nalandaToken = postActivationLogin.body.token;
+
+    // Verify Nalanda owner accesses only Nalanda data
+    const nalandaSettings = await request('GET', '/api/tenant/settings', {
+      headers: { Authorization: `Bearer ${nalandaToken}` },
+    });
+    assert.strictEqual(nalandaSettings.status, 200);
+    assert.strictEqual(nalandaSettings.body.name, 'Nalanda Modern Study Hub');
+    assert.strictEqual(nalandaSettings.body.city, 'Varanasi');
+
+    // I. Test Pending Library Restriction
+    await request('PATCH', `/api/superadmin/libraries/${nalandaTenantId}/status`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+      body: { status: 'pending' },
+    });
+
+    const pendingLoginRes = await request('POST', '/api/auth/login', {
+      body: {
+        email: newOwnerEmail,
+        password: 'NalandaOwner@2026',
+      },
+    });
+    assert.strictEqual(pendingLoginRes.status, 403, 'Pending library owner login must return 403');
+    assert.ok((pendingLoginRes.body.message || pendingLoginRes.body.error).includes('pending approval'));
+
+    // Reactivate library
+    await request('PATCH', `/api/superadmin/libraries/${nalandaTenantId}/status`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+      body: { status: 'active' },
+    });
+
+    const reactivatedLogin = await request('POST', '/api/auth/login', {
+      body: {
+        email: newOwnerEmail,
+        password: 'NalandaOwner@2026',
+      },
+    });
+    assert.strictEqual(reactivatedLogin.status, 200, 'Reactivated library login must succeed');
+
+    console.log('\n ALL 11 CRITICAL BACKEND TESTS PASSED SUCCESSFULLY! \n');
   } finally {
     if (serverInstance) {
       serverInstance.close();
