@@ -1,25 +1,26 @@
 const nodemailer = require('nodemailer');
 const config = require('../config');
 
-let transporter = null;
-
 function getTransporter() {
-  if (!config.smtp.user || !config.smtp.pass) {
+  const user = (process.env.SMTP_USER || config.smtp.user || '').trim();
+  const pass = (process.env.SMTP_PASS || config.smtp.pass || '').trim().replace(/\s+/g, '');
+  const host = (process.env.SMTP_HOST || config.smtp.host || 'smtp.gmail.com').trim();
+  const port = parseInt(process.env.SMTP_PORT || String(config.smtp.port) || '587', 10);
+  const secure = process.env.SMTP_SECURE === 'true' || config.smtp.secure || false;
+
+  if (!user || !pass) {
     return null;
   }
 
-  if (!transporter) {
-    transporter = nodemailer.createTransporter({
-      host: config.smtp.host,
-      port: config.smtp.port,
-      secure: config.smtp.secure, // true for 465, false for 587
-      auth: {
-        user: config.smtp.user,
-        pass: config.smtp.pass,
-      },
-    });
-  }
-  return transporter;
+  return nodemailer.createTransport({
+    host,
+    port,
+    secure,
+    auth: {
+      user,
+      pass,
+    },
+  });
 }
 
 /**
@@ -142,7 +143,8 @@ async function sendFeeReminderEmail(options) {
 
   if (mailer) {
     try {
-      const fromAddress = config.smtp.from || `"${libraryName}" <${config.smtp.user}>`;
+      const senderUser = (process.env.SMTP_USER || config.smtp.user || '').trim();
+      const fromAddress = (process.env.SMTP_FROM || config.smtp.from || `"${libraryName}" <${senderUser}>`).trim();
       const info = await mailer.sendMail({
         from: fromAddress,
         to,
@@ -317,7 +319,8 @@ async function sendOwnerActivationEmail(options) {
 
   if (mailer) {
     try {
-      const fromAddress = config.smtp.from || `"Library SaaS Platform" <${config.smtp.user}>`;
+      const senderUser = (process.env.SMTP_USER || config.smtp.user || '').trim();
+      const fromAddress = (process.env.SMTP_FROM || config.smtp.from || `"Library SaaS Platform" <${senderUser}>`).trim();
       const info = await mailer.sendMail({
         from: fromAddress,
         to,
